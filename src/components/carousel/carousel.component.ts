@@ -92,8 +92,10 @@ export default class SlCarousel extends ShoelaceElement {
   @state() dragging = false;
 
   private autoplayController = new AutoplayController(this, () => this.next());
+  private dragStartPosition: [number, number] = [-1, -1];
   private readonly localize = new LocalizeController(this);
   private mutationObserver: MutationObserver;
+  private pendingSlideChange = false;
 
   connectedCallback(): void {
     super.connectedCallback();
@@ -103,7 +105,7 @@ export default class SlCarousel extends ShoelaceElement {
 
   disconnectedCallback(): void {
     super.disconnectedCallback();
-    this.mutationObserver.disconnect();
+    this.mutationObserver?.disconnect();
   }
 
   protected firstUpdated(): void {
@@ -150,10 +152,24 @@ export default class SlCarousel extends ShoelaceElement {
     ) as SlCarouselItem[];
   }
 
+  private handleClick(event: MouseEvent) {
+    if (this.dragging && this.dragStartPosition[0] > 0 && this.dragStartPosition[1] > 0) {
+      const deltaX = Math.abs(this.dragStartPosition[0] - event.clientX);
+      const deltaY = Math.abs(this.dragStartPosition[1] - event.clientY);
+      const delta = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
+
+      // Prevents clicks on interactive elements while dragging if the click is within a small range. This prevents
+      // accidental drags from interfering with intentional clicks.
+      if (delta >= 10) {
+        event.preventDefault();
+      }
+    }
+  }
+
   private handleKeyDown(event: KeyboardEvent) {
     if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'].includes(event.key)) {
       const target = event.target as HTMLElement;
-      const isRtl = this.matches(':dir(rtl)');
+      const isRtl = this.localize.dir() === 'rtl';
       const isFocusInPagination = target.closest('[part~="pagination-item"]') !== null;
       const isNext =
         event.key === 'ArrowDown' || (!isRtl && event.key === 'ArrowRight') || (isRtl && event.key === 'ArrowLeft');
@@ -207,6 +223,7 @@ export default class SlCarousel extends ShoelaceElement {
       // Start dragging if it hasn't yet
       this.scrollContainer.style.setProperty('scroll-snap-type', 'none');
       this.dragging = true;
+      this.dragStartPosition = [event.clientX, event.clientY];
     }
 
     this.scrollContainer.scrollBy({
@@ -254,6 +271,7 @@ export default class SlCarousel extends ShoelaceElement {
       scrollContainer.style.removeProperty('scroll-snap-type');
 
       this.dragging = false;
+      this.dragStartPosition = [-1, -1];
       this.handleScrollEnd();
     });
   };
@@ -261,6 +279,9 @@ export default class SlCarousel extends ShoelaceElement {
   @eventOptions({ passive: true })
   private handleScroll() {
     this.scrolling = true;
+    if (!this.pendingSlideChange) {
+      this.synchronizeSlides();
+    }
   }
 
   /** @internal Synchronizes the slides with the IntersectionObserver API. */
@@ -277,20 +298,28 @@ export default class SlCarousel extends ShoelaceElement {
         }
 
         const firstIntersecting = entries.find(entry => entry.isIntersecting);
+        if (!firstIntersecting) {
+          return;
+        }
 
-        if (firstIntersecting) {
+        const slidesWithClones = this.getSlides({ excludeClones: false });
+        const slidesCount = this.getSlides().length;
+
+        // Update the current index based on the first visible slide
+        const slideIndex = slidesWithClones.indexOf(firstIntersecting.target as SlCarouselItem);
+        // Normalize the index to ignore clones
+        const normalizedIndex = this.loop ? slideIndex - this.slidesPerPage : slideIndex;
+
+        // Set the index to the closest "snappable" slide
+        this.activeSlide =
+          (Math.ceil(normalizedIndex / this.slidesPerMove) * this.slidesPerMove + slidesCount) % slidesCount;
+
+        if (!this.scrolling) {
           if (this.loop && firstIntersecting.target.hasAttribute('data-clone')) {
             const clonePosition = Number(firstIntersecting.target.getAttribute('data-clone'));
 
             // Scrolls to the original slide without animating, so the user won't notice that the position has changed
             this.goToSlide(clonePosition, 'instant');
-          } else {
-            const slides = this.getSlides();
-
-            // Update the current index based on the first visible slide
-            const slideIndex = slides.indexOf(firstIntersecting.target as SlCarouselItem);
-            // Set the index to the first "snappable" slide
-            this.activeSlide = Math.ceil(slideIndex / this.slidesPerMove) * this.slidesPerMove;
           }
         }
       },
@@ -307,10 +336,9 @@ export default class SlCarousel extends ShoelaceElement {
 
   private handleScrollEnd() {
     if (!this.scrolling || this.dragging) return;
-
-    this.synchronizeSlides();
-
     this.scrolling = false;
+    this.pendingSlideChange = false;
+    this.synchronizeSlides();
   }
 
   private isCarouselItem(node: Node): node is SlCarouselItem {
@@ -353,10 +381,10 @@ export default class SlCarousel extends ShoelaceElement {
       this.createClones();
     }
 
-    this.synchronizeSlides();
-
     // Because the DOM may be changed, restore the scroll position to the active slide
     this.goToSlide(this.activeSlide, 'auto');
+
+    this.synchronizeSlides();
   }
 
   private createClones() {
@@ -380,7 +408,7 @@ export default class SlCarousel extends ShoelaceElement {
   }
 
   @watch('activeSlide')
-  handelSlideChange() {
+  handleSlideChange() {
     const slides = this.getSlides();
     slides.forEach((slide, i) => {
       slide.classList.toggle('--is-active', i === this.activeSlide);
@@ -456,29 +484,57 @@ export default class SlCarousel extends ShoelaceElement {
     }
 
     // Sets the next index without taking into account clones, if any.
-    const newActiveSlide = loop ? (index + slides.length) % slides.length : clamp(index, 0, slides.length - 1);
+    const newActiveSlide = loop
+      ? (index + slides.length) % slides.length
+      : clamp(index, 0, slides.length - slidesPerPage);
     this.activeSlide = newActiveSlide;
+
+    const isRtl = this.localize.dir() === 'rtl';
 
     // Get the index of the next slide. For looping carousel it adds `slidesPerPage`
     // to normalize the starting index in order to ignore the first nth clones.
-    const nextSlideIndex = clamp(index + (loop ? slidesPerPage : 0), 0, slidesWithClones.length - 1);
+    // For RTL it needs to scroll to the last slide of the page.
+    const nextSlideIndex = clamp(
+      index + (loop ? slidesPerPage : 0) + (isRtl ? slidesPerPage - 1 : 0),
+      0,
+      slidesWithClones.length - 1
+    );
+
     const nextSlide = slidesWithClones[nextSlideIndex];
 
     this.scrollToSlide(nextSlide, prefersReducedMotion() ? 'auto' : behavior);
   }
 
   private scrollToSlide(slide: HTMLElement, behavior: ScrollBehavior = 'smooth') {
-    const scrollContainer = this.scrollContainer;
-    const scrollContainerRect = scrollContainer.getBoundingClientRect();
-    const nextSlideRect = slide.getBoundingClientRect();
+    // Since the geometry doesn't happen until rAF, we don't know if we'll be scrolling or not...
+    // It's best to assume that we will and cleanup in the else case below if we didn't need to
+    this.pendingSlideChange = true;
+    window.requestAnimationFrame(() => {
+      // This can happen if goToSlide is called before the scroll container is rendered
+      // We will have correctly set the activeSlide in goToSlide which will get picked up when initializeSlides is called.
+      if (!this.scrollContainer) {
+        return;
+      }
 
-    const nextLeft = nextSlideRect.left - scrollContainerRect.left;
-    const nextTop = nextSlideRect.top - scrollContainerRect.top;
+      const scrollContainer = this.scrollContainer;
+      const scrollContainerRect = scrollContainer.getBoundingClientRect();
+      const nextSlideRect = slide.getBoundingClientRect();
 
-    scrollContainer.scrollTo({
-      left: nextLeft + scrollContainer.scrollLeft,
-      top: nextTop + scrollContainer.scrollTop,
-      behavior
+      const nextLeft = nextSlideRect.left - scrollContainerRect.left;
+      const nextTop = nextSlideRect.top - scrollContainerRect.top;
+
+      if (nextLeft || nextTop) {
+        // This is here just in case someone set it back to false
+        // between rAF being requested and the callback actually running
+        this.pendingSlideChange = true;
+        scrollContainer.scrollTo({
+          left: nextLeft + scrollContainer.scrollLeft,
+          top: nextTop + scrollContainer.scrollTop,
+          behavior
+        });
+      } else {
+        this.pendingSlideChange = false;
+      }
     });
   }
 
@@ -488,7 +544,7 @@ export default class SlCarousel extends ShoelaceElement {
     const currentPage = this.getCurrentPage();
     const prevEnabled = this.canScrollPrev();
     const nextEnabled = this.canScrollNext();
-    const isLtr = this.matches(':dir(ltr)');
+    const isLtr = this.localize.dir() === 'ltr';
 
     return html`
       <div part="base" class="carousel">
@@ -509,6 +565,7 @@ export default class SlCarousel extends ShoelaceElement {
           @mousedown="${this.handleMouseDragStart}"
           @scroll="${this.handleScroll}"
           @scrollend=${this.handleScrollEnd}
+          @click=${this.handleClick}
         >
           <slot></slot>
         </div>

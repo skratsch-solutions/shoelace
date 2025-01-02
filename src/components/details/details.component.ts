@@ -89,7 +89,7 @@ export default class SlDetails extends ShoelaceElement {
 
   disconnectedCallback() {
     super.disconnectedCallback();
-    this.detailsObserver.disconnect();
+    this.detailsObserver?.disconnect();
   }
 
   private handleSummaryClick(event: MouseEvent) {
@@ -187,7 +187,7 @@ export default class SlDetails extends ShoelaceElement {
   }
 
   render() {
-    const isRtl = this.matches(':dir(rtl)');
+    const isRtl = this.localize.dir() === 'rtl';
 
     return html`
       <details
