@@ -57,16 +57,18 @@ If you'd rather not use the CDN for assets, you can create a build task that cop
 One caveat is there's currently Svelte only supports `bind:value` directive in `<input>`, `<textarea>` and `<select>`, but you can still achieve two-way binding manually.
 
 ```jsx
-// ❌ This doesn't work
+// ❌ These do not work
 <sl-input bind:value="name"></sl-input>
+
 <sl-select bind:value="job">
   <sl-option value="designer">Designer</sl-option>
   <sl-option value="developer">Developer</sl-option>
 </sl-select>
 
-// ✅ This is a bit longer, but it works
+// ✅ These are a bit longer, but work
 <sl-input value={name} oninput={event => name = event.target.value}></sl-input>
-<sl-select value={job} onsl-change={event => job = event.target.value}>
+
+<sl-select value={job} onsl-input={event => job = event.target.value}>
   <sl-option value="designer">Designer</sl-option>
   <sl-option value="developer">Developer</sl-option>
 </sl-select>
