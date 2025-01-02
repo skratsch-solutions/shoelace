@@ -14,6 +14,7 @@ New versions of Shoelace are released as-needed and generally occur when a criti
 
 ## Next
 
+- Improved performance of `<sl-select>` when using a large number of options [#2318]
 - Updated the Japanese translation [#2329]
 
 ## 2.19.1
